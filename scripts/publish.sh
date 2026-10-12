@@ -130,6 +130,7 @@ if [ -n "$DRY" ]; then
   exit 0
 fi
 
+CREATED=0
 if [ "$AUTH" = "token" ]; then
   EXISTING="$(api "https://api.github.com/repos/$SLUG")"
   if [ "$(printf '%s' "$EXISTING" | jget message)" = "Not Found" ]; then
@@ -146,6 +147,7 @@ if [ "$AUTH" = "token" ]; then
     if [ "$(printf '%s' "$MADE" | jget message)" != "" ]; then
       die "could not create the repository: $(printf '%s' "$MADE" | jget message)"
     fi
+    CREATED=1
     note "created github.com/$SLUG"
   else
     note "github.com/$SLUG already exists - pushing to it"
@@ -187,6 +189,11 @@ note ""
 note "Your whole iteration loop is:   npm run check"
 note "  ~5 seconds, no browser needed. It is how the bugs in this one were found."
 note ""
-note "The repository is private for now, which seemed the safer default."
-note "To make it public: Settings -> General -> Danger Zone -> Change visibility."
+if [ "$CREATED" = "1" ]; then
+  note "It is private, which is the safer default - nothing is public until you"
+  note "decide it should be. To change that: Settings -> General -> Danger Zone."
+else
+  note "That was a repository you had already made, so I left its own settings"
+  note "alone - visibility and description are yours, not mine to change."
+fi
 note ""
