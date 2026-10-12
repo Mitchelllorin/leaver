@@ -35,10 +35,8 @@ class FakeImageData {
 }
 globalThis.ImageData = FakeImageData;
 const canvases = [];
-globalThis.document = {
+globalThis.document = Object.assign(new EventTarget(), {
   pointerLockElement: null,
-  addEventListener() {},
-  removeEventListener() {},
   exitPointerLock() {},
   createElement(tag) {
     if (tag !== 'canvas') return {};
@@ -64,7 +62,7 @@ globalThis.document = {
     canvases.push(canvas);
     return canvas;
   },
-};
+});
 
 // Stubs for the browser globals the modules touch at import time.
 const store = new Map();
@@ -74,15 +72,31 @@ globalThis.localStorage = {
   removeItem: (k) => store.delete(k),
 };
 globalThis.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
-globalThis.window = {
-  devicePixelRatio: 1,
-  innerWidth: 1280,
-  innerHeight: 720,
-  addEventListener() {},
-  removeEventListener() {},
-};
+class FakeWindow extends EventTarget {
+  constructor() {
+    super();
+    this.devicePixelRatio = 1;
+    this.innerWidth = 1280;
+    this.innerHeight = 720;
+  }
+}
+globalThis.window = new FakeWindow();
 globalThis.requestAnimationFrame = (fn) => setTimeout(() => fn(performance.now()), 0);
 globalThis.cancelAnimationFrame = () => {};
+
+class KeyboardEventLike extends Event {
+  constructor(type, init = {}) {
+    super(type);
+    this.code = init.code ?? '';
+    this.key = init.key ?? init.code ?? '';
+    this.repeat = !!init.repeat;
+    this.metaKey = false;
+    this.ctrlKey = false;
+    this.altKey = false;
+    this.shiftKey = false;
+  }
+}
+globalThis.KeyboardEvent = KeyboardEventLike;
 
 const AU = 149_597_870.7;
 const t0 = Date.now();
@@ -393,6 +407,27 @@ ok(
 );
 
 // Every event must run to completion without throwing.
+console.log('\nKeyboard bindings');
+const { bus } = await import('../src/core/EventBus.js');
+{
+  // The help panel has always advertised "I — information about the current
+  // world", but nothing ever emitted it. Assert the key really is wired.
+  const seen = new Set();
+  const off = bus.onAny((type) => seen.add(type));
+  const keys = ['KeyI', 'KeyM', 'KeyT', 'KeyG', 'KeyH', 'KeyP', 'Slash'];
+  for (const code of keys) {
+    window.dispatchEvent(new KeyboardEventLike('keydown', { code }));
+  }
+  off();
+  ok('I opens the fact sheet', seen.has('ui:info-toggle'));
+  ok('M opens the worlds list', seen.has('ui:toggle-map'));
+  ok('T opens the tour', seen.has('ui:toggle-tour'));
+  ok('G opens settings', seen.has('ui:toggle-settings'));
+  ok('H toggles the interface', seen.has('ui:toggle-hud'));
+  ok('P pauses', seen.has('ui:toggle-pause'));
+  ok('/ opens help', seen.has('ui:toggle-help'));
+}
+
 console.log('\nEvent catalogue');
 for (const def of EVENT_CATALOGUE) {
   let entry = null;
@@ -473,6 +508,118 @@ ok('ineligible events respect their cooldown', (() => {
   const report = events.cooldownReport();
   return report.some((r) => r.remaining > 0) && report.every((r) => r.remaining >= 0);
 })());
+
+console.log('\nOpening view');
+{
+  // Regression: the opening shot used a fixed offset that ignored where the Sun
+  // was, so on some dates you began the session staring into its bloom.
+  const { openingView } = await import('../src/controls/framing.js');
+  for (const id of ['earth', 'mars', 'venus', 'saturn', 'luna', 'pluto']) {
+    const v = openingView(id, solar);
+    const body = solar.bodies.get(id);
+    const r = body.radiusUnits;
+    const toTarget = {
+      x: solar.positionOf(id).x - v.position.x,
+      y: solar.positionOf(id).y - v.position.y,
+      z: solar.positionOf(id).z - v.position.z,
+    };
+    const len = Math.hypot(toTarget.x, toTarget.y, toTarget.z);
+    const fwd = new THREE.Vector3(0, 0, -1).applyEuler(
+      new THREE.Euler(v.pitch, v.yaw, 0, 'YXZ')
+    );
+    const dot = (fwd.x * toTarget.x + fwd.y * toTarget.y + fwd.z * toTarget.z) / len;
+    const aimErrorDeg = (Math.acos(Math.max(-1, Math.min(1, dot))) * 180) / Math.PI;
+    ok(
+      `opening view on ${id}: camera aims at the target`,
+      aimErrorDeg < 1,
+      `${aimErrorDeg.toFixed(2)}° off centre`
+    );
+    ok(
+      `opening view on ${id}: Sun is out of frame`,
+      v.sunAngleDeg > 60,
+      `Sun ${v.sunAngleDeg.toFixed(0)}° from the view axis`
+    );
+    ok(
+      `opening view on ${id}: standoff is sane`,
+      v.standoff > r * 4 && v.standoff < r * 10,
+      `${v.standoff.toFixed(2)} units vs radius ${r.toFixed(2)}`
+    );
+  }
+  ok('opening view survives the Sun itself as a target', !!openingView('sun', solar));
+}
+
+console.log('\nLook controls');
+{
+  // Every input device must turn the view the same way. These assertions are
+  // about the resulting camera orientation, not about which variable changed,
+  // because the sign conventions cancel out and a double negative looks fine
+  // until you press a key.
+  player.mode = 'flight';
+  player.keys.clear();
+  player.mouse.dx = 0;
+  player.mouse.dy = 0;
+  const step = (n = 8) => {
+    for (let i = 0; i < n; i++) {
+      const ctx = {
+        engine,
+        dt: 1 / 60,
+        realDt: 1 / 60,
+        simTime: engine.simTime,
+        camera: engine.camera,
+        origin: engine.origin,
+      };
+      orbital2.update(1 / 60, ctx);
+      player.update(1 / 60, ctx);
+    }
+  };
+  const forwardY = () => Math.sin(player.pitch); // + means looking up
+  const rightward = () => -Math.sin(player.yaw); // + means facing +x
+
+  player.yaw = 0;
+  player.pitch = 0;
+  player.keys.add('ArrowLeft');
+  step();
+  ok('ArrowLeft turns the view left', rightward() < 0, `rightward ${rightward().toFixed(3)}`);
+
+  player.yaw = 0;
+  player.keys.clear();
+  player.keys.add('ArrowRight');
+  step();
+  ok('ArrowRight turns the view right', rightward() > 0, `rightward ${rightward().toFixed(3)}`);
+
+  player.yaw = 0;
+  player.pitch = 0;
+  player.keys.clear();
+  player.keys.add('ArrowUp');
+  step();
+  ok('ArrowUp looks up', forwardY() > 0, `upward ${forwardY().toFixed(3)}`);
+
+  player.pitch = 0;
+  player.keys.clear();
+  player.keys.add('ArrowDown');
+  step();
+  ok('ArrowDown looks down', forwardY() < 0, `upward ${forwardY().toFixed(3)}`);
+
+  // The mouse path is the reference the arrows were matched to.
+  player.yaw = 0;
+  player.pitch = 0;
+  player.keys.clear();
+  player.mouse.dx = 0.12;
+  player.mouse.dy = 0;
+  step(1);
+  ok('mouse right turns the view right', rightward() > 0, `rightward ${rightward().toFixed(3)}`);
+
+  player.pitch = 0;
+  player.mouse.dx = 0;
+  player.mouse.dy = -0.12;
+  step(1);
+  ok('mouse up looks up', forwardY() > 0, `upward ${forwardY().toFixed(3)}`);
+  player.mouse.dx = 0;
+  player.mouse.dy = 0;
+  player.keys.clear();
+  player.yaw = 0;
+  player.pitch = 0;
+}
 
 console.log('\nFlight and landing');
 ok('flight controller starts in space', player.mode === 'flight');

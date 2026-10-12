@@ -82,6 +82,17 @@ const solar = {
 const player = {
   mode: 'flight',
   focusId: 'earth',
+  touchMove: { x: 0, y: 0 },
+  touchBoost: false,
+  usingTouch: false,
+  dashCount: 0,
+  landCount: 0,
+  dash() {
+    this.dashCount++;
+  },
+  tryLandOrLaunch() {
+    this.landCount++;
+  },
   position: { x: 120, y: 20, z: 0, length: () => Math.hypot(120, 20, 0) },
   velocity: { length: () => 12 },
   dashing: 0,
@@ -196,24 +207,31 @@ offSpeak();
 info.hide();
 
 console.log('\nGuided tour');
+const { TOUR: TOUR_STOPS } = await import('../src/ui/Panels.js');
 const tour = new Tour(uiRoot, { announcer });
-let orbited = [];
-const offOrbit = bus.on('ui:orbit', (e) => orbited.push(e.id));
+const visited = [];
+const offGoto = bus.on('tour:goto', (e) => visited.push(e.id));
+let openedInfo = 0;
+const offInfo = bus.on('ui:info-open', () => openedInfo++);
 tour.show();
 ok('tour opens on the first stop', tour.index === 0, `index ${tour.index}`);
-ok('tour stops are rendered', document.querySelectorAll('.tour-step').length >= 8);
-ok('the active stop is marked', document.querySelectorAll('.tour-step.is-active').length === 1);
-const { TOUR: TOUR_STOPS } = await import('../src/ui/Panels.js');
-const before = orbited.length;
+ok('the caption names the current stop', tour.panel.querySelector('.tour-title').textContent.length > 3);
+ok('the caption explains the current stop', tour.panel.querySelector('.tour-text').textContent.length > 80);
+ok('a dot per stop is shown', tour.panel.querySelectorAll('.tour-dots span').length === TOUR_STOPS.length);
+ok('exactly one dot is marked as current', tour.panel.querySelectorAll('.tour-dots .is-here').length === 1);
+const before = visited.length;
 for (let i = 0; i < TOUR_STOPS.length + 1; i++) {
-  document.querySelector('[data-action="next"]').click();
+  tour.panel.querySelector('[data-action="next"]').click();
 }
-ok('tour cycles through every stop', orbited.length - before === TOUR_STOPS.length + 1);
-ok('tour visits real bodies', orbited.every((id) => !!bodyById.get(id)), orbited.join(' '));
-document.querySelector('[data-action="prev"]').click();
+ok('tour cycles through every stop', visited.length - before === TOUR_STOPS.length + 1);
+ok('tour visits real bodies', visited.every((id) => !!bodyById.get(id)), visited.join(' '));
+tour.panel.querySelector('[data-action="prev"]').click();
 ok('previous works', tour.index === (TOUR_STOPS.length + 1 - 1) % TOUR_STOPS.length);
+// Regression: the tour used to open the fact sheet on top of its own caption.
+ok('the tour never opens a panel over itself', openedInfo === 0);
 tour.hide();
-offOrbit();
+offGoto();
+offInfo();
 
 console.log('\nSettings panel');
 const settingsPanel = new SettingsPanel(uiRoot, { announcer });
@@ -267,6 +285,72 @@ ok('help can be dismissed', (() => {
 })());
 help.dispose();
 
+console.log('\nPanels: only one at a time, and always dismissible');
+{
+  // The original complaint: menus stacked on top of each other and nothing
+  // could be dismissed. These are the regression tests for that.
+  const { PanelManager } = await import('../src/ui/Panels.js');
+  const panels = new PanelManager();
+  panels.register(browser, 'worlds');
+  panels.register(info, 'info');
+  panels.register(tour, 'tour');
+  panels.register(settingsPanel, 'settings');
+  panels.register(help, 'help');
+
+  const canvas = document.getElementById('viewport');
+  panels.attachDismissTarget(canvas);
+
+  const changes = [];
+  const offChanges = bus.on('ui:panels-changed', (e) => changes.push(e.name));
+
+  panels.open(browser);
+  ok('opening the worlds list works', browser.isOpen && !info.isOpen);
+  panels.open(info);
+  ok('opening the fact sheet closes the worlds list', info.isOpen && !browser.isOpen);
+  panels.open(tour);
+  ok('opening the tour closes the fact sheet', tour.isOpen && !info.isOpen);
+  ok(
+    'at most one panel is ever open',
+    [browser, info, tour, settingsPanel, help].filter((p) => p.isOpen).length === 1
+  );
+  panels.open(settingsPanel);
+  panels.open(help);
+  ok(
+    'five panels opened in a row still leave exactly one open',
+    [browser, info, tour, settingsPanel, help].filter((p) => p.isOpen).length === 1 && help.isOpen
+  );
+  ok('the manager reports what is open', panels.current === help && panels.anyOpen);
+  ok('panel changes are announced', changes.includes('worlds') && changes.includes('help'), changes.join(','));
+
+  ok('Escape closes the open panel', (() => {
+    window.dispatchEvent(new window.Event('keydown'));
+    const ev = new window.Event('keydown', { cancelable: true });
+    Object.defineProperty(ev, 'key', { value: 'Escape' });
+    window.dispatchEvent(ev);
+    return !help.isOpen && !panels.anyOpen;
+  })());
+
+  panels.open(browser);
+  ok('a press on the scene dismisses every panel', (() => {
+    canvas.dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
+    return !panels.anyOpen;
+  })());
+
+  // Toggling the same panel twice closes it rather than leaving it stuck.
+  panels.toggle(browser);
+  ok('toggling opens', browser.isOpen);
+  panels.toggle(browser);
+  ok('toggling again closes', !browser.isOpen);
+
+  // The tour is a caption bar, not a modal: it must not be a .panel, or it
+  // would join the stacking set.
+  ok('the tour is a caption bar, not a stacked panel', tour.panel.classList.contains('tour-caption'));
+  ok('the caption bar leaves the scene visible', !tour.panel.classList.contains('panel'));
+
+  offChanges();
+  panels.dispose();
+}
+
 console.log('\nBus-driven behaviour');
 const startedEvents = [];
 const offEvents = bus.on('event:started', (e) => startedEvents.push(e));
@@ -315,14 +399,126 @@ for (let i = 0; i < 40; i++) hud.updateLabels(labelCtx);
 ok('labels are created for visible bodies', document.querySelectorAll('.label').length > 0, `${document.querySelectorAll('.label').length} labels`);
 ok('labels carry names', [...document.querySelectorAll('.label .name')].every((n) => n.textContent.length > 0));
 
+console.log('\nTouch controls: one thumb drives, one looks');
+const { TouchControls } = await import('../src/controls/TouchControls.js');
+const touch = new TouchControls({}, player, { root: uiRoot });
+{
+  const canvas = document.getElementById('viewport');
+  const layer = document.querySelector('.touch-layer');
+  ok('a touch layer exists', !!layer);
+  ok('the touch layer starts hidden', layer.hidden === true);
+
+  const fire = (type, touches) => {
+    const ev = new window.Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, 'changedTouches', { value: touches });
+    canvas.dispatchEvent(ev);
+    return ev;
+  };
+  const t = (id, x, y) => ({ identifier: id, clientX: x, clientY: y });
+
+  // Left thumb becomes the drive stick.
+  fire('touchstart', [t(1, 120, 600)]);
+  ok('a left-hand touch claims the drive stick', !!touch._move && !touch._look);
+  fire('touchmove', [t(1, 120, 540)]);
+  ok('pushing up drives forward', player.touchMove.y > 0.5, `y ${player.touchMove.y.toFixed(2)}`);
+  ok('a pure vertical push does not strafe', Math.abs(player.touchMove.x) < 0.01, `x ${player.touchMove.x.toFixed(3)}`);
+
+  fire('touchmove', [t(1, 178, 600)]);
+  ok('pushing right strafes right', player.touchMove.x > 0.5, `x ${player.touchMove.x.toFixed(2)}`);
+  fire('touchmove', [t(1, 120, 600)]);
+  ok('returning to the centre stops', Math.abs(player.touchMove.x) < 0.05 && Math.abs(player.touchMove.y) < 0.05);
+
+  // Right thumb becomes look, simultaneously.
+  const dxBefore = player.mouse.dx;
+  fire('touchstart', [t(2, 1100, 400)]);
+  ok('a second touch claims look, keeping the stick', !!touch._look && !!touch._move);
+  fire('touchmove', [t(2, 1160, 400)]);
+  // Positive dx is "look right", the same sign the mouse produces; the sign
+  // only becomes a direction inside PlayerController._applyLook.
+  ok('dragging right feeds a rightward look', player.mouse.dx > dxBefore, `dx ${player.mouse.dx.toFixed(3)}`);
+  ok('looking does not disturb the drive stick', Math.abs(player.touchMove.x) < 0.05);
+
+  // Releasing both stops the ship.
+  fire('touchend', [t(1, 120, 600)]);
+  fire('touchend', [t(2, 1160, 400)]);
+  ok('releasing the stick stops the ship', player.touchMove.x === 0 && player.touchMove.y === 0);
+  ok('releasing both clears both roles', !touch._look && !touch._move);
+
+  // Right thumb first, then left: the stick must still be claimable.
+  fire('touchstart', [t(3, 1200, 300)]);
+  fire('touchstart', [t(4, 100, 620)]);
+  ok('a right-thumb-first grip still gets a drive stick', !!touch._move && !!touch._look);
+  fire('touchend', [t(3, 1200, 300)]);
+  fire('touchend', [t(4, 100, 620)]);
+
+  ok('touch switches the input model away from the mouse', player.usingTouch === true);
+  ok('the touch layer becomes visible on first touch', layer.hidden === false);
+
+  // Action buttons take a third finger so steering is never interrupted.
+  const boost = document.querySelector('[data-touch="boost"]');
+  boost.dispatchEvent(new window.Event('pointerdown'));
+  ok('holding boost engages it', player.touchBoost === true);
+  boost.dispatchEvent(new window.Event('pointerup'));
+  ok('releasing boost disengages it', player.touchBoost === false);
+
+  document.querySelector('[data-touch="dash"]').dispatchEvent(new window.Event('pointerdown'));
+  ok('the dash button dashes', player.dashCount === 1);
+
+  const land = document.querySelector('[data-touch="land"]');
+  player.landingCandidate = { def: { id: 'mars', name: 'Mars' }, altitudeUnits: 1, radiusUnits: 1 };
+  touch.update();
+  ok('the land button appears when a landing is possible', land.hidden === false);
+  land.dispatchEvent(new window.Event('pointerdown'));
+  ok('the land button asks to land', player.landCount === 1);
+  player.landingCandidate = null;
+  touch.update();
+  ok('the land button hides again otherwise', land.hidden === true);
+}
+
+console.log('\nDeclutter');
+{
+  // The HUD hides empty blocks instead of dedicating screen space to them.
+  const eventsBlock = document.getElementById('hud-events-block');
+  hud.updateEvents({ activeNames: () => [], log: [] });
+  ok('the event block hides when nothing is happening', eventsBlock.style.display === 'none');
+  hud.updateEvents({ activeNames: () => ['X'], log: [{ name: 'Impact', detail: 'x' }] });
+  ok('the event block returns when something happens', eventsBlock.style.display === '');
+
+  ok('the rail offers a way to open panels', !!document.querySelector('.rail [data-rail="menu"]'));
+  ok('the rail offers a way to get the interface back', !!document.querySelector('.rail [data-rail="hud"]'));
+  ok('the rail offers help', !!document.querySelector('.rail [data-rail="help"]'));
+  ok('the rail survives hiding the HUD', (() => {
+    hud.toggle(false);
+    const stillThere = !!document.querySelector('.rail') && document.body.classList.contains('hud-hidden');
+    hud.toggle(true);
+    return stillThere && !document.body.classList.contains('hud-hidden');
+  })());
+
+  settings.set('hudDetail', 'compact');
+  hud.applySettings();
+  ok('compact mode is applied when asked for', document.querySelector('.hud').classList.contains('is-compact'));
+  settings.set('hudDetail', 'auto');
+  hud.applySettings();
+  ok('auto mode is honoured', document.querySelector('.hud').classList.contains('is-compact') === (window.innerWidth < 900));
+
+  // Notices must not pile up in the middle of the screen.
+  for (let i = 0; i < 6; i++) hud.notice({ title: `n${i}`, text: 'x', duration: 60 });
+  ok('notices are capped so they cannot bury the view', document.querySelectorAll('.notice').length <= 2,
+     `${document.querySelectorAll('.notice').length} notices`);
+}
+
 console.log('\nCleanup');
 hud.dispose();
 browser.dispose();
 info.dispose();
 settingsPanel.dispose();
 tour.dispose();
+touch.dispose();
 ok('HUD removes itself', document.querySelectorAll('.hud').length === 0);
 ok('panels remove themselves', document.querySelectorAll('.panel').length === 0);
+ok('the tour caption removes itself', document.querySelectorAll('.tour-caption').length === 0);
+ok('the HUD rail removes itself', document.querySelectorAll('.rail').length === 0);
+ok('the touch layer removes itself', document.querySelectorAll('.touch-layer').length === 0);
 
 console.log(`\nResult: ${checks - failures.length}/${checks} checks passed`);
 if (failures.length) {
