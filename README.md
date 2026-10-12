@@ -103,6 +103,31 @@ This was a stated requirement, not an afterthought.
 
 ---
 
+## Getting it onto your own machine
+
+If the project is in front of you as an agent workspace rather than a clone, one
+command publishes it to your own Git host:
+
+```bash
+./scripts/publish.sh https://github.com/you/orrery.git
+```
+
+Create the repository **empty first** (no README, no .gitignore, no licence) and
+that script does the rest: it takes your name and email, re-authors every commit
+as yours, puts your name in the LICENSE, sets `origin`, and pushes the branch as
+`main`. If your host asks for a password, use a personal access token.
+
+Then on your device:
+
+```bash
+git clone https://github.com/you/orrery.git
+cd orrery
+npm ci          # Node >= 20.19
+npm run dev
+```
+
+The project is MIT licensed, so you can do whatever you like with it.
+
 ## Running it
 
 ```bash
