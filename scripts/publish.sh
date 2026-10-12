@@ -100,6 +100,10 @@ else
   AUTH="ssh"
 fi
 
+# GitHub's name field can arrive with trailing whitespace, which then reaches commit
+# subjects and the licence text, where it reads as a typo.
+NAME="$(printf '%s' "$NAME" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+EMAIL="$(printf '%s' "$EMAIL" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
 [ -n "$NAME" ] && [ -n "$EMAIL" ] || die "a name and an email are required to author commits"
 SLUG="$OWNER/$REPO"
 note "publishing to github.com/$SLUG as $NAME <$EMAIL>"
@@ -107,7 +111,11 @@ note "publishing to github.com/$SLUG as $NAME <$EMAIL>"
 # --- re-author the history as yours -------------------------------------------
 git config user.name "$NAME"
 git config user.email "$EMAIL"
-if git log --format='%an %ae' | grep -q 'Freebuff Agent'; then
+# exits at its own first match, the writer then dies of SIGPIPE, and `pipefail`
+# turns that death into a failed condition - so this rewrite was skipped about
+# three times in four, silently, leaving the history authored by an agent.
+# Note the command substitution rather than `| grep -q`. With grep -q, grep
+if [ -n "$(git log --format='%an %ae' | grep 'Freebuff Agent')" ]; then
   # Only tracked edits matter: an untracked cache cannot block a rebase, and
   # refusing to publish because of one would be a puzzle, not a safeguard.
   if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
