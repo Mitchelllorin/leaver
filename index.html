@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Orrery — fly the solar system</title>
+    <meta
+      name="description"
+      content="An explorable, educational solar system: fly between the planets, land on any world, and watch the Sun misbehave. Built with real orbital mechanics."
+    />
+    <meta name="color-scheme" content="dark" />
+    <link rel="stylesheet" href="/src/ui/styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#ui-root">Skip to controls</a>
+
+    <canvas id="viewport" aria-hidden="true"></canvas>
+
+    <!-- Everything interactive lives here. The canvas is decoration: it is
+         marked aria-hidden and all information is reachable through the DOM. -->
+    <div id="ui-root"></div>
+
+    <div id="boot" class="boot" role="status">
+      <div class="boot-inner">
+        <h1 class="boot-title">Orrery</h1>
+        <p class="boot-sub">Painting the solar system…</p>
+        <div class="boot-bar"><span id="boot-progress"></span></div>
+        <p class="boot-hint" id="boot-hint">Generating planetary surfaces procedurally.</p>
+        <noscript>
+          <p class="boot-error">This simulation needs JavaScript and WebGL.</p>
+        </noscript>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
