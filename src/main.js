@@ -10,7 +10,9 @@ import { PlayerController } from './controls/PlayerController.js';
 import { SurfaceScene } from './surface/SurfaceScene.js';
 import { PostFX } from './scene/PostFX.js';
 import { Hud } from './ui/Hud.js';
-import { BodyBrowser, InfoPanel, Tour, SettingsPanel, HelpPanel } from './ui/Panels.js';
+import { BodyBrowser, InfoPanel, Tour, SettingsPanel, HelpPanel, PanelManager } from './ui/Panels.js';
+import { TouchControls } from './controls/TouchControls.js';
+import { openingView } from './controls/framing.js';
 import { createAnnouncer, applyDisplayPreferences } from './ui/a11y.js';
 import { bodyById, ALL_BODIES } from './data/bodies.js';
 import { clamp, damp, DEG } from './util/math.js';
@@ -95,6 +97,21 @@ const tour = new Tour(uiRoot, { announcer });
 const settingsPanel = new SettingsPanel(uiRoot, { announcer });
 const help = new HelpPanel(uiRoot, { announcer });
 
+/**
+ * One panel at a time, and always a way out. Escape and a press on the scene
+ * both dismiss whatever is open, which previously did not exist for the worlds
+ * list or the fact sheet at all.
+ */
+const panels = new PanelManager();
+panels.register(browser, 'worlds');
+panels.register(info, 'info');
+panels.register(tour, 'tour');
+panels.register(settingsPanel, 'settings');
+panels.register(help, 'help');
+panels.attachDismissTarget(canvas);
+
+const touch = new TouchControls(engine, player, { root: uiRoot });
+
 // The player measures real distances for the HUD, the list and the info cards.
 player.realDistance = (id) => hud.realDistance(id);
 
@@ -121,42 +138,41 @@ const uiSystem = {
 
     hud.update(dt, ctx);
     hud.updateEvents(events);
+    touch.update();
     if (surface.active) surface.update(dt, ctx);
   },
 };
 
 /* ------------------------------------------------------- keyboard actions --- */
 
-function openPanel(panel) {
-  const others = [browser, info, tour, settingsPanel, help].filter((p) => p !== panel);
-  for (const p of others) p.hide();
-  panel.show();
-}
-
 const unsubs = [
   bus.on('ui:toggle-map', () => {
     player.releasePointer();
-    if (browser.panel.hidden) openPanel(browser);
-    else browser.hide();
+    panels.toggle(browser);
   }),
   bus.on('ui:toggle-settings', () => {
     player.releasePointer();
-    if (settingsPanel.panel.hidden) openPanel(settingsPanel);
-    else settingsPanel.hide();
+    panels.toggle(settingsPanel);
   }),
   bus.on('ui:toggle-tour', () => {
     player.releasePointer();
-    if (tour.panel.hidden) openPanel(tour);
-    else tour.hide();
+    panels.toggle(tour);
   }),
   bus.on('ui:toggle-help', () => {
     player.releasePointer();
-    if (help.panel.hidden) openPanel(help);
-    else help.hide();
+    panels.toggle(help);
   }),
+  // The fact sheet key that the help panel has always documented but which was
+  // never actually bound to anything.
   bus.on('ui:info-toggle', () => {
-    if (info.panel.hidden) info.show(info.id ?? player.focusId ?? 'earth');
-    else info.hide();
+    if (info.isOpen) {
+      panels.closeAll();
+      return;
+    }
+    const id = info.id ?? player.focusId ?? player.landingCandidate?.def.id ?? 'earth';
+    panels.only(info);
+    info.show(id);
+    panels._announce();
   }),
   bus.on('ui:toggle-pause', () => {
     settings.set('paused', !settings.get('paused'));
@@ -164,14 +180,18 @@ const unsubs = [
   }),
 
   // -- go somewhere -------------------------------------------------------
+  // Travelling clears the interface: you asked to go there, so you want to see
+  // it. The head-up display names the target and its distance on arrival.
   bus.on('ui:warp', ({ id }) => {
+    panels.closeAll();
     player.releaseFocus();
     player.warpTo(id);
-    info.show(id);
   }),
   bus.on('ui:orbit', ({ id }) => {
     player.focusOn(id);
+    panels.only(info);
     info.show(id);
+    panels._announce();
   }),
   bus.on('ui:land', ({ id }) => {
     const def = bodyById.get(id);
@@ -182,7 +202,16 @@ const unsubs = [
     const def = bodyById.get(id);
     if (def) announcer.politely(`${def.name}. ${def.summary}`);
   }),
-  bus.on('ui:info-open', ({ id }) => info.show(id)),
+  bus.on('ui:info-open', ({ id }) => {
+    panels.only(info);
+    info.show(id);
+    panels._announce();
+  }),
+  // The tour drives the camera itself; it must not open the fact sheet on top
+  // of its own caption, which is what it used to do.
+  bus.on('tour:goto', ({ id }) => {
+    player.focusOn(id);
+  }),
 
   // -- landing ------------------------------------------------------------
   bus.on('surface:landing-request', ({ id, body }) => {
@@ -194,17 +223,16 @@ const unsubs = [
       return;
     }
     surface.enter(renderer.def, player);
-    openPanel(info);
+    panels.only(info);
     info.show(id);
+    panels._announce();
   }),
   bus.on('surface:launch-request', () => {
     if (surface.active) surface.launch();
   }),
   bus.on('surface:entered', () => {
-    browser.hide();
-    tour.hide();
-    settingsPanel.hide();
-    help.hide();
+    // Landing means you want the whole screen for the surface.
+    panels.closeAll();
     player.releasePointer();
     showSurfaceBar();
   }),
@@ -287,17 +315,16 @@ bus.on('surface:depth', ({ depth, crushDepth }) => {
 (async function start() {
   await bootUp();
 
-  // Open on Earth: the one world the viewer already has a relationship with.
-  const earth = solar.positionOf('earth');
-  const earthBody = solar.bodies.get('earth');
-  const standoff = earthBody.radiusUnits * 7;
-  player.position.set(
-    earth.x + standoff * 0.62,
-    earth.y + standoff * 0.34,
-    earth.z + standoff * 0.7
-  );
-  player.yaw = Math.atan2(-(earth.x - player.position.x), -(earth.z - player.position.z));
-  player.pitch = -0.22;
+  // Open on Earth, on the lit side, with the Sun kept out of frame. The previous
+  // version used a fixed offset direction that ignored where the Sun was, so
+  // depending on the date you could start staring straight into its bloom.
+  const view = openingView('earth', solar);
+  if (view) {
+    player.position.set(view.position.x, view.position.y, view.position.z);
+    player.yaw = view.yaw;
+    player.pitch = view.pitch;
+  }
+  player.focusId = 'earth';
 
   engine.addSystem(orbital);
   engine.addSystem(player);
@@ -309,29 +336,21 @@ bus.on('surface:depth', ({ depth, crushDepth }) => {
   boot.classList.add('is-hidden');
   setTimeout(() => boot.remove(), 800);
 
+  // A single short line. The previous version stacked three long notices in the
+  // middle of the screen, and the guide button in the corner covers the rest.
   hud.notice({
-    title: 'You are flying',
-    text: 'W to thrust, mouse to look, Space to boost, X to dash. Press M for the worlds list, T for a guided tour, / for every control, and L to land on anything you can reach.',
+    title: 'W to thrust, mouse to look',
+    text: 'Space boosts, X dashes, L lands. The buttons top-right open the worlds list and the full controls.',
     kind: 'info',
-    duration: 16,
+    duration: 9,
     announce: true,
   });
-  setTimeout(() => {
-    hud.notice({
-      title: 'Tip: slide the scale',
-      text: 'Press G and move the top slider from the toy model towards true scale. The planets are in their real positions the whole time — only the distances on screen change.',
-      kind: 'warm',
-      duration: 14,
-    });
-  }, 17000);
 
-  info.show('earth');
-  info.hide();
-
-  // First phenomenon shortly after arrival, so the system feels alive.
+  // First phenomenon shortly after arrival, so the system feels alive. It gets
+  // its own notice from the events system, which is enough on its own screen.
   setTimeout(() => {
     if (events.log.length === 0) events.trigger('meteor-shower');
-  }, 9000);
+  }, 12000);
 
   window.addEventListener('beforeunload', () => {
     for (const un of unsubs) un();
@@ -341,6 +360,8 @@ bus.on('surface:depth', ({ depth, crushDepth }) => {
     tour.dispose();
     settingsPanel.dispose();
     help.dispose();
+    panels.dispose();
+    touch.dispose();
     events.dispose();
     postfx.dispose();
     player.dispose();

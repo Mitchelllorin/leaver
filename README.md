@@ -3,10 +3,21 @@
 An explorable, educational solar system you can fly through, land on, and watch
 misbehave.
 
-Open it and you are in a ship in Earth's neighbourhood. Thrust with **W**, look
-with the mouse, **Space** to boost, **X** to dash, **L** to land on whatever you
-can reach. Press **M** for the list of worlds, **T** for a guided tour, **/** for
-every control.
+Open it and you are in a ship in Earth's neighbourhood, on its lit side with the
+Sun kept out of frame — arrivals are framed that way on purpose, so the star
+never glares you out of seeing the world you came for.
+
+Thrust with **W**, look with the mouse, **Space** to boost, **X** to dash,
+**L** to land on whatever you can reach. Arrow keys look around too, and every
+control works from the keyboard alone. Press **M** for the list of worlds, **I**
+for the facts on whatever you are looking at, **T** for a guided tour, **H** to
+clear the interface, **/** for everything.
+
+On a touchscreen, **one thumb drives and one thumb looks**, both at once: the
+stick appears wherever your left thumb lands, so there is no fixed pad to hunt
+for. Boost, dash and land are buttons under your right thumb, and the three
+buttons in the top-right corner open the worlds list, hide the interface and
+show this help. Tapping the scene dismisses whatever panel is open.
 
 ---
 
@@ -38,6 +49,11 @@ horizon, and a true scale mode where 1 render unit is exactly 1,000 km. Orbit
 *shapes* are preserved because the compression is applied radially. Satellite
 orbits get their own transform in the parent's frame, so moons never get crushed
 into their planets.
+
+**The interface stays out of the way.** At most one panel is open at a time,
+every panel closes on Escape or a tap on the scene, empty readouts hide
+themselves, and the guided tour is a caption bar along the bottom rather than a
+modal covering the world it is describing.
 
 **Nine random phenomena**, each a plugin, each with the science attached:
 
