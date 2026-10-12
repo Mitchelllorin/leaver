@@ -29,6 +29,8 @@ const DEFAULTS = {
   eventFeed: true,
   focusLanding: true,
   hudScale: 1,
+  hudDetail: 'auto', // 'auto' | 'full' | 'compact'
+  touchControls: true,
 };
 
 let state = { ...DEFAULTS };

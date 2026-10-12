@@ -416,6 +416,11 @@ export class SurfaceScene {
     if (k.has('KeyS')) _move.z += 1;
     if (k.has('KeyA')) _move.x -= 1;
     if (k.has('KeyD')) _move.x += 1;
+    // Walking uses the same analogue stick as flying.
+    if (player.touchMove) {
+      _move.z -= player.touchMove.y;
+      _move.x += player.touchMove.x;
+    }
     _move.applyAxisAngle(UP, this.yaw);
 
     const speedScale = clamp(this.gravity / 9.807, 0.35, 1.6);
@@ -423,7 +428,7 @@ export class SurfaceScene {
     this.velocity.z = _move.z * speed * speedScale;
     this.velocity.y -= this.gravity * dt;
 
-    if (k.has('Space') && this.onGround) {
+    if ((k.has('Space') || player.touchBoost) && this.onGround) {
       // Jump height scales with local gravity, so a Moon hop is enormous.
       this.velocity.y = Math.sqrt(2 * this.gravity * (this.gravity < 3 ? 4.5 : 1.4));
       this.onGround = false;

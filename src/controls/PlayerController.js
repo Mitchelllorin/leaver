@@ -63,6 +63,12 @@ export class PlayerController {
     this.keys = new Set();
     this.mouse = { dx: 0, dy: 0, dragging: false };
     this.locked = false;
+    /** Touch input, written by TouchControls. Analogue, so it is separate from
+     *  the key set rather than synthesised as key presses. */
+    this.touchMove = { x: 0, y: 0 };
+    this.touchBoost = false;
+    /** Set once a real touch event arrives, so we stop expecting a mouse. */
+    this.usingTouch = false;
     this._warp = null;
 
     this._bindInput();
@@ -76,6 +82,8 @@ export class PlayerController {
     this._onKeyDown = (e) => {
       // Never swallow browser or assistive-tech shortcuts.
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // Nor steal keys from someone typing or dragging a slider.
+      if (isFormControl(e.target)) return;
       const k = e.code;
       if (MOVEMENT_KEYS.has(k) || k === 'Space') e.preventDefault();
       if (k === 'Escape') this.releasePointer();
@@ -98,6 +106,9 @@ export class PlayerController {
     };
     this._onMouseDown = (e) => {
       if (e.button !== 0) return;
+      // Touch devices synthesise mouse events after a tap; capturing the
+      // pointer there would be both pointless and disruptive.
+      if (this.usingTouch) return;
       if (settings.get('pointerLock') !== false && !this.locked && this.mode !== 'surface') {
         canvas.requestPointerLock?.();
       } else {
@@ -137,6 +148,7 @@ export class PlayerController {
     if (code === 'KeyH') bus.emit('ui:toggle-hud');
     if (code === 'KeyM') bus.emit('ui:toggle-map');
     if (code === 'KeyT') bus.emit('ui:toggle-tour');
+    if (code === 'KeyI') bus.emit('ui:info-toggle');
     if (code === 'KeyP') bus.emit('ui:toggle-pause');
     if (code === 'Slash') bus.emit('ui:toggle-help');
     // F is 'fly up', so landing is L on its own.
@@ -162,7 +174,7 @@ export class PlayerController {
 
   /** The speed governor: how fast can we fly right now, in units/second? */
   currentSpeed() {
-    const boost = this.keys.has('Space') ? BOOST : CRUISE;
+    const boost = this.keys.has('Space') || this.touchBoost ? BOOST : CRUISE;
     const dash = this.dashing > 0 ? DASH * (this.dashing / 0.55) : 0;
     return (boost + dash) * (this.speedMultiplier ?? 1);
   }
@@ -210,7 +222,12 @@ export class PlayerController {
     const fwd = useArrows ? (k.has('KeyW') ? 1 : 0) - (k.has('KeyS') ? 1 : 0) : forward;
     const str = useArrows ? (k.has('KeyD') ? 1 : 0) - (k.has('KeyA') ? 1 : 0) : strafe;
 
-    this.throttle = damp(this.throttle, fwd, 8, dt);
+    // Merge the analogue touch stick with the digital keys. Both are just
+    // inputs to the same axes, so flight behaves identically either way.
+    const driveX = str + this.touchMove.x;
+    const driveY = fwd + this.touchMove.y;
+
+    this.throttle = damp(this.throttle, clamp(driveY, -1, 1), 8, dt);
 
     // Q/E roll the ship, which is how you actually line up a landing.
     const rollRate = ((k.has('KeyE') ? 1 : 0) - (k.has('KeyQ') ? 1 : 0)) * 1.5;
@@ -226,8 +243,8 @@ export class PlayerController {
     const braking = k.has('ShiftLeft') || k.has('ShiftRight') || k.has('KeyZ');
 
     _desired.set(0, 0, 0);
-    if (fwd !== 0) _desired.addScaledVector(_fwd, fwd);
-    if (str !== 0) _desired.addScaledVector(_right, str);
+    if (Math.abs(driveY) > 0.001) _desired.addScaledVector(_fwd, clamp(driveY, -1, 1));
+    if (Math.abs(driveX) > 0.001) _desired.addScaledVector(_right, clamp(driveX, -1, 1));
     if (lift !== 0) _desired.addScaledVector(_up, lift);
 
     let targetSpeed = this.currentSpeed();
@@ -290,11 +307,15 @@ export class PlayerController {
 
     const arrowLook = settings.get('arrowKeysLook') !== false;
     if (arrowLook) {
+      // These carry the same signs the mouse produces, so that every input
+      // device turns the view the same way. yaw decreases to the right and
+      // pitch increases upwards; getting these backwards makes the keyboard
+      // feel broken, which is worse than not having it.
       const keyRate = 1.9 * dt;
-      if (this.keys.has('ArrowLeft')) dx = keyRate;
-      if (this.keys.has('ArrowRight')) dx = -keyRate;
-      if (this.keys.has('ArrowUp')) dy = keyRate;
-      if (this.keys.has('ArrowDown')) dy = -keyRate;
+      if (this.keys.has('ArrowLeft')) dx = -keyRate;
+      if (this.keys.has('ArrowRight')) dx = keyRate;
+      if (this.keys.has('ArrowUp')) dy = -keyRate;
+      if (this.keys.has('ArrowDown')) dy = keyRate;
     }
     const invert = settings.get('invertY') ? -1 : 1;
     this.yaw -= dx;
@@ -470,3 +491,16 @@ const _orbit = new THREE.Vector3();
 const _look = new THREE.Vector3();
 const _euler = new THREE.Euler();
 const _quat = new THREE.Quaternion();
+
+/** True for anything the user might be typing into or dragging. */
+function isFormControl(el) {
+  if (!el || !el.tagName) return false;
+  const tag = el.tagName.toUpperCase();
+  return (
+    tag === 'INPUT' ||
+    tag === 'SELECT' ||
+    tag === 'TEXTAREA' ||
+    tag === 'OPTION' ||
+    el.isContentEditable === true
+  );
+}
