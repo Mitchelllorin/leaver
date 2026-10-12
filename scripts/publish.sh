@@ -108,7 +108,9 @@ note "publishing to github.com/$SLUG as $NAME <$EMAIL>"
 git config user.name "$NAME"
 git config user.email "$EMAIL"
 if git log --format='%an %ae' | grep -q 'Freebuff Agent'; then
-  if [ -n "$(git status --porcelain)" ]; then
+  # Only tracked edits matter: an untracked cache cannot block a rebase, and
+  # refusing to publish because of one would be a puzzle, not a safeguard.
+  if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
     die "you have uncommitted changes. Commit or stash them first: re-authoring every
          commit is a rewrite, and I would rather not do it over a dirty tree."
   fi

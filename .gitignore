@@ -4,3 +4,6 @@ dist
 *.log
 .env
 .env.*
+
+# Vite dependency pre-bundle cache
+.vite/
