@@ -106,25 +106,37 @@ This was a stated requirement, not an afterthought.
 ## Getting it onto your own machine
 
 If the project is in front of you as an agent workspace rather than a clone, one
-command publishes it to your own Git host:
+command publishes it to GitHub:
 
 ```bash
-./scripts/publish.sh https://github.com/you/orrery.git
+./scripts/publish.sh            # -> github.com/mitchelllorin/orrery
 ```
 
-Create the repository **empty first** (no README, no .gitignore, no licence) and
-that script does the rest: it takes your name and email, re-authors every commit
-as yours, puts your name in the LICENSE, sets `origin`, and pushes the branch as
-`main`. If your host asks for a password, use a personal access token.
+You do not need to create the repository first, or tell it your name, or set up a
+remote. It asks GitHub who you are - using the noreply address GitHub accepts, so
+the commits link to your account rather than an agent's - creates the repository
+if it does not exist (**private**, so nothing goes public before you decide), and
+pushes the branch as `main`. `./scripts/publish.sh other-name` targets a
+different repository name; `ORRERY_DRY_RUN=1` stops just before the network.
+
+The only thing it cannot invent is access, so it asks for a token once. Make one
+at <https://github.com/settings/tokens/new?scopes=repo> with the `repo` box
+ticked. It reads the token without echoing it, uses it for that one push, and
+never writes it to disk, to `.git/config`, or into the process list. If you
+already have an SSH key configured it uses that and asks for nothing. Running it
+twice is safe, and it will not force-push.
 
 Then on your device:
 
 ```bash
-git clone https://github.com/you/orrery.git
+git clone https://github.com/mitchelllorin/orrery.git
 cd orrery
 npm ci          # Node >= 20.19
 npm run dev
 ```
+
+`npm run check` is the whole iteration loop: about five seconds, no browser, no
+GPU. It is how the bugs described at the top of this file were found.
 
 The project is MIT licensed, so you can do whatever you like with it.
 
