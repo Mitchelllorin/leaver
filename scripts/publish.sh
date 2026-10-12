@@ -113,7 +113,10 @@ if git log --format='%an %ae' | grep -q 'Freebuff Agent'; then
          commit is a rewrite, and I would rather not do it over a dirty tree."
   fi
   note "re-authoring the history as yours…"
-  git rebase --root --exec 'git commit --amend --no-edit --reset-author' >/dev/null
+  # --allow-empty because the very first commit of an agent-generated
+  # workspace is often an empty placeholder, and amending an empty commit is
+  # refused without it - which aborts the whole rewrite on commit one.
+  git rebase --root --exec 'git commit --amend --no-edit --reset-author --allow-empty' >/dev/null
 fi
 
 # --- put your name on the licence ---------------------------------------------
