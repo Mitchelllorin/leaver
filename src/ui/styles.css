@@ -9,10 +9,11 @@
 
 :root {
   --bg: #04060d;
-  --panel: rgba(9, 13, 24, 0.86);
+  --panel: rgba(10, 14, 26, 0.52);
   --panel-solid: #0a0e1a;
-  --edge: rgba(150, 180, 230, 0.18);
-  --edge-strong: rgba(170, 200, 255, 0.42);
+  --edge: rgba(150, 180, 230, 0.22);
+  --edge-strong: rgba(170, 200, 255, 0.46);
+  --glass: rgba(8, 11, 20, 0.42);
   --text: #e8eefc;
   --text-dim: #a4b2cc;
   --text-faint: #6f7d96;
@@ -73,6 +74,10 @@ html,
 body {
   margin: 0;
   height: 100%;
+  /* Dragging to look on a touchscreen must not select text or flash highlights. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
@@ -218,12 +223,15 @@ select {
 
 .hud-block {
   position: absolute;
-  background: var(--panel);
+  background: var(--glass);
   border: 1px solid var(--edge);
   border-radius: var(--radius);
-  padding: 10px 12px;
-  backdrop-filter: blur(9px);
-  box-shadow: var(--shadow);
+  padding: 8px 11px;
+  backdrop-filter: blur(11px);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35);
+  /* The HUD sits on top of the thing you are trying to look at, so it must
+     never be the brightest or most solid object on screen. */
+  opacity: 0.94;
 }
 
 .hud-top-left {
@@ -475,7 +483,7 @@ select {
   border: 1px solid var(--edge);
   border-radius: 14px;
   box-shadow: var(--shadow);
-  backdrop-filter: blur(14px);
+  backdrop-filter: blur(20px) saturate(1.15);
   display: flex;
   flex-direction: column;
   max-height: calc(100vh - 40px);
@@ -848,25 +856,44 @@ select {
 }
 
 /* ---------------------------------------------------------------- mobile */
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) {
+  /* Full-screen panels were the single biggest complaint: they covered
+     everything and stacked on top of each other. Bottom sheets leave the view
+     visible, which is the whole point of a simulator. */
   .panel-left,
   .panel-right {
     left: 8px;
     right: 8px;
-    width: auto;
-    top: 8px;
+    top: auto;
     bottom: 8px;
+    width: auto;
+    max-height: 62vh;
+  }
+  .panel-center {
+    left: 8px;
+    right: 8px;
+    top: auto;
+    bottom: 8px;
+    transform: none;
+    width: auto;
+    max-height: 72vh;
   }
   .hud-top-left,
-  .hud-bottom-left {
+  .hud-bottom-left,
+  .hud-top-right {
     min-width: 0;
-    font-size: 11px;
+    font-size: 10.5px;
+    padding: 6px 9px;
   }
   .hud-bottom-right {
-    max-width: 46vw;
+    max-width: 52vw;
   }
   .labels {
     display: none;
+  }
+  .notices {
+    bottom: 118px;
+    max-width: 86vw;
   }
 }
 
@@ -888,5 +915,247 @@ select {
   body {
     background: white;
     color: black;
+  }
+}
+
+/* ===========================================================================
+   Additions: getting out of the user's way.
+   The first pass put a lot of interface on screen and gave very little of it a
+   way out. Everything below exists to fix that.
+   =========================================================================== */
+
+/* ------------------------------------------------- always-available controls */
+/* Two small pills, visible at all times, so that a touch user has a way to open
+   a panel AND a way to clear the interface without hunting for a key. */
+.rail {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 6px;
+  z-index: 20;
+}
+.rail-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--edge);
+  background: var(--glass);
+  backdrop-filter: blur(11px);
+  color: var(--text-dim);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0;
+  transition: color var(--motion), background var(--motion);
+}
+.rail-btn:hover {
+  color: var(--text);
+  background: rgba(124, 199, 255, 0.16);
+}
+.rail-btn[aria-expanded='true'] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+/* When the HUD is hidden the rail stays, otherwise there is no way back. */
+.hud.is-hidden ~ .rail,
+body.hud-hidden .rail {
+  opacity: 0.55;
+}
+
+/* Compact mode: only the clock and speed, one line each. */
+.hud.is-compact .hud-top-left,
+.hud.is-compact .hud-bottom-right {
+  display: none;
+}
+.hud.is-compact .hud-top-right,
+.hud.is-compact .hud-bottom-left {
+  padding: 6px 10px;
+}
+.hud.is-compact .hud-block .hud-label {
+  display: none;
+}
+.hud.is-compact .hud-value {
+  font-size: 1em;
+}
+.hud.is-compact .hud-value.big {
+  font-size: 1em;
+}
+
+/* ------------------------------------------------------------------- tour --- */
+/* The tour was a centred modal, which is exactly backwards: it covers the thing
+   it is describing. It is now a caption bar along the bottom. */
+.tour-caption {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 16px;
+  width: min(720px, 92vw);
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 14px;
+  backdrop-filter: blur(20px) saturate(1.15);
+  box-shadow: var(--shadow);
+  padding: 12px 14px;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  animation: rise var(--motion) ease-out;
+}
+.tour-caption[hidden] {
+  display: none;
+}
+.tour-caption .tour-copy {
+  flex: 1;
+  min-width: 0;
+}
+.tour-caption h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tour-caption h3 .tour-count {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--text-faint);
+  font-weight: 500;
+}
+.tour-caption p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.tour-caption .tour-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: none;
+}
+.tour-caption .tour-actions .btn {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+.tour-dots {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+}
+.tour-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+}
+.tour-dots span.is-here {
+  background: var(--accent);
+}
+
+/* --------------------------------------------------------- touch controls --- */
+/* Only shown on devices that actually report touch, or when forced in settings.
+   One thumb drives, one thumb looks; the action buttons take a third touch. */
+.touch-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 15;
+}
+.touch-layer[hidden] {
+  display: none;
+}
+
+.stick {
+  position: absolute;
+  width: 116px;
+  height: 116px;
+  margin: -58px 0 0 -58px;
+  border-radius: 50%;
+  border: 2px solid rgba(190, 215, 255, 0.35);
+  background: rgba(8, 12, 22, 0.3);
+  backdrop-filter: blur(4px);
+  opacity: 0;
+  transition: opacity 140ms;
+}
+.stick.is-live {
+  opacity: 1;
+}
+.stick .knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 46px;
+  height: 46px;
+  margin: -23px 0 0 -23px;
+  border-radius: 50%;
+  background: rgba(124, 199, 255, 0.42);
+  border: 1px solid rgba(190, 215, 255, 0.6);
+}
+
+.touch-actions {
+  position: absolute;
+  right: 14px;
+  bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  pointer-events: auto;
+}
+.touch-btn {
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  border: 1px solid var(--edge-strong);
+  background: var(--glass);
+  backdrop-filter: blur(11px);
+  color: var(--text);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  padding: 0;
+  touch-action: none;
+}
+.touch-btn:active,
+.touch-btn.is-held {
+  background: rgba(124, 199, 255, 0.32);
+}
+.touch-btn.big {
+  width: 74px;
+  height: 74px;
+}
+.touch-btn[hidden] {
+  display: none;
+}
+.touch-hint {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 96px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--glass);
+  border: 1px solid var(--edge);
+  color: var(--text-dim);
+  font-size: 12px;
+  backdrop-filter: blur(9px);
+  opacity: 1;
+  transition: opacity 600ms;
+}
+.touch-hint.is-gone {
+  opacity: 0;
+}
+
+@media print {
+  .rail,
+  .touch-layer,
+  .tour-caption {
+    display: none !important;
   }
 }

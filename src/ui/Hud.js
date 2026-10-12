@@ -98,6 +98,27 @@ export class Hud {
     this.root.appendChild(el);
     this.el = el;
 
+    // A permanent, always-reachable pair of controls. Without these, hiding the
+    // HUD on a touchscreen would leave nothing to tap at all.
+    this.rail = document.createElement('div');
+    this.rail.className = 'rail';
+    this.rail.innerHTML = `
+      <button class="rail-btn" data-rail="menu" aria-haspopup="dialog" aria-expanded="false"
+              title="Worlds list (M)" aria-label="Open the worlds list">&#9776;</button>
+      <button class="rail-btn" data-rail="hud" aria-pressed="true"
+              title="Show or hide the interface (H)" aria-label="Show or hide the interface">&#9707;</button>
+      <button class="rail-btn" data-rail="help" aria-haspopup="dialog" aria-expanded="false"
+              title="Controls and credits (/)" aria-label="Open the controls help">?</button>
+    `;
+    this.root.appendChild(this.rail);
+    this.rail.querySelector('[data-rail="hud"]').addEventListener('click', () => this.toggle());
+    this.rail.querySelector('[data-rail="menu"]').addEventListener('click', () => {
+      bus.emit('ui:toggle-map');
+    });
+    this.rail.querySelector('[data-rail="help"]').addEventListener('click', () => {
+      bus.emit('ui:toggle-help');
+    });
+
     const q = (id) => el.querySelector(`#${id}`);
     this.nodes = {
       target: q('hud-target'),
@@ -171,6 +192,13 @@ export class Hud {
       }),
       bus.on('ui:toggle-hud', () => this.toggle()),
       bus.on('settings:change', () => this.applySettings()),
+      bus.on('ui:panels-changed', ({ name }) => {
+        for (const [key, id] of [['menu', 'worlds'], ['help', 'help']]) {
+          this.rail
+            .querySelector(`[data-rail="${key}"]`)
+            .setAttribute('aria-expanded', name === id ? 'true' : 'false');
+        }
+      }),
     ];
     this.applySettings();
   }
@@ -178,12 +206,32 @@ export class Hud {
   applySettings() {
     this.el.style.setProperty('--hud-scale', String(settings.get('hudScale') ?? 1));
     this.nodes.labels.style.display = settings.get('labels') ? '' : 'none';
-    this.nodes.eventsBlock.style.display = settings.get('eventFeed') === false ? 'none' : '';
+    this.el.classList.toggle('is-compact', this.compact);
+    this._syncEventsBlock();
+  }
+
+  /** 'auto' keeps the interface small on small or coarse-pointer screens. */
+  get compact() {
+    const mode = settings.get('hudDetail') ?? 'auto';
+    if (mode === 'compact') return true;
+    if (mode === 'full') return false;
+    const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+    return coarse || window.innerWidth < 900 || window.innerHeight < 620;
+  }
+
+  _syncEventsBlock() {
+    if (settings.get('eventFeed') === false) {
+      this.nodes.eventsBlock.style.display = 'none';
+      return;
+    }
+    // An empty "all quiet" box is just another panel in the way.
+    this.nodes.eventsBlock.style.display = this._hasEvents ? '' : 'none';
   }
 
   toggle(force) {
     this.visible = force ?? !this.visible;
     this.el.classList.toggle('is-hidden', !this.visible);
+    document.body.classList.toggle('hud-hidden', !this.visible);
     this.announcer.politely(this.visible ? 'Head-up display shown.' : 'Head-up display hidden.');
   }
 
@@ -196,8 +244,9 @@ export class Hud {
     node.querySelector('p').textContent = text;
     this.nodes.notices.appendChild(node);
 
-    // Keep the stack short.
-    while (this.nodes.notices.children.length > 4) {
+    // Keep the stack short. Four toasts at boot covered the middle of the
+    // screen, which is precisely the area the user wants to look at.
+    while (this.nodes.notices.children.length > 2) {
       this.nodes.notices.firstChild.remove();
     }
     if (announce) this.announcer.politely(`${title}. ${text}`);
@@ -243,15 +292,15 @@ export class Hud {
     // -- target -------------------------------------------------------------
     const focusId = p.mode === 'focus' ? p.focusId : p.landingCandidate?.def.id ?? p.focusId;
     const def = focusId ? bodyById.get(focusId) : null;
+    // With nothing selected there is nothing to report: hide the block rather
+    // than dedicating a corner of the screen to the words "free flight".
+    const targetBlock = n.target.closest('.hud-block');
+    if (targetBlock) targetBlock.style.display = def ? '' : 'none';
     if (def) {
       n.target.textContent = def.name;
-      n.targetSub.textContent =
-        def.radiusKm
-          ? `${def.type} · radius ${def.radiusKm.toLocaleString()} km`
-          : def.type;
-    } else {
-      n.target.textContent = 'Free flight';
-      n.targetSub.textContent = 'Pick a world from the list, or press M';
+      n.targetSub.textContent = def.radiusKm
+        ? `${def.type} · radius ${def.radiusKm.toLocaleString()} km`
+        : def.type;
     }
 
     // -- distance and altitude ---------------------------------------------
@@ -395,21 +444,22 @@ export class Hud {
         this._lastNotice = key;
       }
     }
-    const recent = events.log.slice(0, 3);
-    this.nodes.events.innerHTML =
-      recent.length === 0
-        ? 'All quiet in the solar system.'
-        : recent
-            .map(
-              (e) =>
-                `<div style="margin-bottom:5px"><strong style="color:var(--text)">${escapeHtml(e.name)}</strong> — ${escapeHtml(e.detail || '')}</div>`
-            )
-            .join('');
+    // One line, not three: the feed is a nudge, not a log to read mid-flight.
+    const recent = events.log.slice(0, 1);
+    this._hasEvents = recent.length > 0;
+    this.nodes.events.innerHTML = recent
+      .map(
+        (e) =>
+          `<div><strong style="color:var(--text)">${escapeHtml(e.name)}</strong>${e.detail ? ` — ${escapeHtml(e.detail)}` : ''}</div>`
+      )
+      .join('');
+    this._syncEventsBlock();
   }
 
   dispose() {
     for (const un of this._unsubs) un();
     this.el.remove();
+    this.rail.remove();
   }
 }
 

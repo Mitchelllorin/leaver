@@ -81,6 +81,112 @@ function shortDistance(km) {
   return `${Math.round(km)} km`;
 }
 
+/**
+ * PanelManager — the fix for "I have menus and menus and menus".
+ *
+ * Every panel routes its visibility through here, which guarantees two things
+ * that the first version got wrong:
+ *
+ *   1. At most ONE panel is open at a time. Previously the tour opened the fact
+ *      sheet on top of itself, and warp/orbit called show() directly, so panels
+ *      simply piled up.
+ *   2. There is always a way out: Escape, or a tap on the 3D view, closes
+ *      whatever is open. Both side panels used to have no dismissal at all.
+ */
+export class PanelManager {
+  constructor() {
+    /** @type {Array<{show:()=>void, hide:()=>void, isOpen:boolean, panel:HTMLElement}>} */
+    this.panels = [];
+    /** panel -> short name, so the interface can react to what is open. */
+    this.names = new Map();
+    this._dismissTargets = [];
+    this._onKeyDown = (e) => {
+      if (e.key !== 'Escape') return;
+      if (this.closeAll()) e.preventDefault();
+    };
+    this._onPointerDown = (e) => {
+      // A press on the scene itself means "get this off my screen".
+      if (this.anyOpen) this.closeAll();
+    };
+    window.addEventListener('keydown', this._onKeyDown);
+  }
+
+  register(panel, name = panel?.constructor?.name ?? 'panel') {
+    if (!this.panels.includes(panel)) this.panels.push(panel);
+    this.names.set(panel, name);
+    return panel;
+  }
+
+  _announce() {
+    bus.emit('ui:panels-changed', { name: this.current ? this.names.get(this.current) : null });
+  }
+
+  /** Panels that should dismiss on a tap, i.e. the render surface. */
+  attachDismissTarget(element) {
+    element.addEventListener('pointerdown', this._onPointerDown);
+    this._dismissTargets.push(element);
+    return () => element.removeEventListener('pointerdown', this._onPointerDown);
+  }
+
+  /**
+   * Close every panel except `panel`, without calling its show(). Use when a
+   * panel needs arguments: `panels.only(info); info.show('mars')`.
+   */
+  only(panel) {
+    for (const p of this.panels) {
+      if (p !== panel && p.isOpen) p.hide();
+    }
+    return panel;
+  }
+
+  /** Open one panel, closing any other. */
+  open(panel) {
+    if (!panel) return null;
+    this.only(panel);
+    panel.show();
+    this._announce();
+    return panel;
+  }
+
+  toggle(panel) {
+    if (!panel) return null;
+    if (panel.isOpen) {
+      panel.hide();
+      this._announce();
+      return null;
+    }
+    return this.open(panel);
+  }
+
+  closeAll() {
+    let closed = false;
+    for (const p of this.panels) {
+      if (p.isOpen) {
+        p.hide();
+        closed = true;
+      }
+    }
+    if (closed) this._announce();
+    return closed;
+  }
+
+  get anyOpen() {
+    return this.panels.some((p) => p.isOpen);
+  }
+
+  get current() {
+    return this.panels.find((p) => p.isOpen) ?? null;
+  }
+
+  dispose() {
+    window.removeEventListener('keydown', this._onKeyDown);
+    for (const t of this._dismissTargets) {
+      t.removeEventListener('pointerdown', this._onPointerDown);
+    }
+    this._dismissTargets.length = 0;
+  }
+}
+
 /* --------------------------------------------------------------- browser --- */
 
 export class BodyBrowser {
@@ -270,7 +376,12 @@ export class InfoPanel {
     });
   }
 
-  show(id) {
+  /**
+   * @param {string} [id] the world to describe. Falls back to whatever was last
+   * shown, then to Earth, so that toggling the panel from a keyboard shortcut or
+   * a button never silently fails to open.
+   */
+  show(id = this.id ?? 'earth') {
     const def = bodyById.get(id);
     if (!def) return;
     this.id = id;
@@ -396,66 +507,62 @@ const TOUR = [
   },
 ];
 
+/**
+ * The guided tour.
+ *
+ * This used to be a centred modal listing all nine stops, which is exactly
+ * backwards: it covered the world it was describing, and it opened the fact
+ * sheet on top of itself as well. It is now a caption bar along the bottom that
+ * describes only the stop you are actually looking at, and it never opens
+ * another panel.
+ */
 export class Tour {
   constructor(root, { announcer }) {
     this.announcer = announcer;
     this.index = -1;
-    this.panel = el('section', 'panel panel-center');
+    this.panel = el('section', 'tour-caption');
     this.panel.hidden = true;
-    this.panel.setAttribute('role', 'dialog');
-    this.panel.setAttribute('aria-modal', 'true');
-    this.panel.setAttribute('aria-labelledby', 'tour-title');
+    this.panel.setAttribute('role', 'region');
+    this.panel.setAttribute('aria-label', 'Guided tour');
     this.panel.innerHTML = `
-      <div class="panel-head">
-        <h2 id="tour-title">Guided tour</h2>
-        <button class="icon-x" data-close aria-label="Close tour">&times;</button>
+      <div class="tour-copy">
+        <h3><span class="tour-count"></span><span class="tour-title"></span></h3>
+        <p class="tour-text"></p>
+        <div class="tour-dots" aria-hidden="true"></div>
       </div>
-      <div class="panel-body" id="tour-body"></div>
-      <div class="panel-foot">
-        <button class="btn" data-action="prev">Previous</button>
-        <button class="btn primary" data-action="next">Next stop</button>
-        <button class="btn ghost" data-action="stay">Close and explore</button>
+      <div class="tour-actions">
+        <button class="btn" data-action="prev" aria-label="Previous tour stop">Previous</button>
+        <button class="btn primary" data-action="next" aria-label="Next tour stop">Next stop</button>
+        <button class="btn ghost" data-action="stay">Exit tour</button>
       </div>
     `;
     root.appendChild(this.panel);
-    this.body = this.panel.querySelector('#tour-body');
-    this.panel.querySelector('[data-close]').addEventListener('click', () => this.hide());
     this.panel.querySelector('[data-action="next"]').addEventListener('click', () => this.next());
     this.panel.querySelector('[data-action="prev"]').addEventListener('click', () => this.prev());
     this.panel.querySelector('[data-action="stay"]').addEventListener('click', () => this.hide());
-    this._release = null;
   }
 
   _render() {
-    this.body.innerHTML = TOUR.map(
-      (stop, i) => `
-      <article class="tour-step ${i === this.index ? 'is-active' : ''}">
-        <h3>${i + 1}. ${escapeHtml(stop.title)}</h3>
-        <p>${escapeHtml(stop.text)}</p>
-      </article>`
+    const stop = TOUR[this.index] ?? TOUR[0];
+    this.panel.querySelector('.tour-count').textContent = `${this.index + 1} / ${TOUR.length}`;
+    this.panel.querySelector('.tour-title').textContent = stop.title;
+    this.panel.querySelector('.tour-text').textContent = stop.text;
+    this.panel.querySelector('.tour-dots').innerHTML = TOUR.map(
+      (_, i) => `<span class="${i === this.index ? 'is-here' : ''}"></span>`
     ).join('');
-    this.body.querySelector('.is-active')?.scrollIntoView({ block: 'nearest' });
   }
 
   show() {
     this.panel.hidden = false;
-    this._render();
     if (this.index < 0) {
       this.go(0);
     } else {
-      this._focus();
+      this._render();
     }
-  }
-
-  _focus() {
-    this._release?.();
-    this._release = trapFocus(this.panel, () => this.hide());
   }
 
   hide() {
     this.panel.hidden = true;
-    this._release?.();
-    this._release = null;
   }
 
   next() {
@@ -470,14 +577,13 @@ export class Tour {
     this.index = i;
     const stop = TOUR[i];
     this._render();
-    this._focus();
-    bus.emit('ui:orbit', { id: stop.id });
-    bus.emit('ui:info-open', { id: stop.id });
+    // Deliberately NOT ui:orbit, which would open the fact sheet too. The tour
+    // wants the view to itself; the caption carries the narrative.
+    bus.emit('tour:goto', { id: stop.id });
     this.announcer.politely(`${stop.title}. ${stop.text}`);
   }
 
   dispose() {
-    this._release?.();
     this.panel.remove();
   }
 }
@@ -561,6 +667,10 @@ export class SettingsPanel {
       range('fov', 'Field of view', 50, 100, 1, s.fov, () => ''),
       checkbox('invertY', 'Invert vertical look', s.invertY, ''),
       checkbox('pointerLock', 'Capture the mouse when flying', s.pointerLock !== false, 'Off means drag-to-look, which some people prefer.'),
+      checkbox('touchControls', 'On-screen touch controls', s.touchControls !== false, 'One thumb to drive, one to look, with boost and dash buttons. Appears automatically on a touchscreen.'),
+      select('hudDetail', 'Interface size', [['auto', 'Auto — small screens get the compact layout'], ['full', 'Full'], ['compact', 'Compact — clock and speed only']], s.hudDetail ?? 'auto', () =>
+        'Compact hides the target and event blocks and shrinks the readouts.'
+      ),
       checkbox('eventFeed', 'Show what is happening now', s.eventFeed !== false, 'A running list of recent phenomena in the corner.'),
       select('units', 'Units', [['metric', 'Metric (km, AU)'], ['imperial', 'Imperial (miles)']], s.units, () => ''),
     ].join('');
@@ -690,6 +800,14 @@ export class HelpPanel {
           <dt>Shift / Z</dt><dd>Brake</dd>
           <dt>Scroll</dt><dd>Adjust cruise speed, or zoom when orbiting a world</dd>
         </dl>
+        <div class="section-head">Touchscreen</div>
+        <dl class="keys">
+          <dt>Left thumb</dt><dd>Drives. The stick appears wherever you put your thumb, so you never have to find a fixed pad</dd>
+          <dt>Right thumb</dt><dd>Looks around at the same time</dd>
+          <dt>Boost</dt><dd>Hold the large button, bottom right. Dash and Land sit beside it</dd>
+          <dt>Top right</dt><dd>&#9776; worlds list, &#9707; hide the interface, ? this help</dd>
+          <dt>Tap the scene</dt><dd>Dismisses whatever panel is open</dd>
+        </dl>
         <div class="section-head">Going places</div>
         <dl class="keys">
           <dt>M</dt><dd>Worlds list, with live distances</dd>
@@ -769,3 +887,18 @@ function describeType(def) {
 }
 
 export { TOUR };
+
+/**
+ * Every panel exposes the same open/closed state, so PanelManager can treat
+ * them identically without five near-identical getters.
+ */
+for (const Panel of [BodyBrowser, InfoPanel, Tour, SettingsPanel, HelpPanel]) {
+  if (!Object.getOwnPropertyDescriptor(Panel.prototype, 'isOpen')) {
+    Object.defineProperty(Panel.prototype, 'isOpen', {
+      get() {
+        return !this.panel.hidden;
+      },
+      configurable: true,
+    });
+  }
+}
