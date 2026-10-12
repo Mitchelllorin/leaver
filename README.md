@@ -142,6 +142,10 @@ npm run dev
 | `npm run check` | Both test suites (178 checks) |
 | `npm run verify` | Tests plus a production build |
 
+`npm run build` produces a plain static site in `dist/`. There is no server side
+and no build-time secret, so any static host will serve it as-is — upload `dist/`
+or point the host at it and you are done.
+
 The test suites run headlessly and need no GPU:
 
 - `npm run check:sim` — the dataset, the scale model, orbital mechanics against
